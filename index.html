@@ -1,0 +1,1220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>FreeCell in Plain JavaScript</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      font-family: Arial, Helvetica, sans-serif;
+      background-color: #0b6623; /* dark green table background */
+      color: #333;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    h1 {
+      color: #fff;
+      margin: 20px;
+    }
+    #game {
+      width: 1100px;
+      margin-bottom: 40px;
+    }
+    .top-row {
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 20px;
+    }
+    .cells,
+    .foundations {
+      display: flex;
+    }
+    .cell,
+    .foundation {
+      width: 100px;
+      height: 140px;
+      border: 2px dashed rgba(255,255,255,0.5);
+      border-radius: 6px;
+      margin: 0 5px;
+      position: relative;
+      box-sizing: border-box;
+    }
+    .columns {
+      display: flex;
+      justify-content: space-between;
+    }
+    .column {
+      flex: 1;
+      min-width: 100px;
+      height: 600px;
+      border: 2px dashed rgba(255,255,255,0.3);
+      border-radius: 6px;
+      margin: 0 5px;
+      position: relative;
+    }
+    .card {
+      width: 100px;
+      height: 140px;
+      border: 1px solid #222;
+      border-radius: 6px;
+      background-color: #fff;
+      box-shadow: 2px 2px 4px rgba(0,0,0,0.4);
+      position: absolute;
+      cursor: pointer;
+      user-select: none;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      padding: 5px;
+      box-sizing: border-box;
+      position: absolute;
+      overflow: hidden;
+    }
+    .card.red {
+      color: #d00;
+    }
+    .card.black {
+      color: #000;
+    }
+    .card .rank {
+      font-size: 16px;
+      font-weight: bold;
+    }
+    .card .suit {
+      font-size: 24px;
+      text-align: center;
+    }
+    .card .pips {
+      flex-grow: 1;
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      align-items: center;
+      font-size: 20px;
+      line-height: 1;
+    }
+    .card .pips .pip {
+      margin: 1px;
+    }
+
+    /* When using image-based pips and corner suits, size them appropriately. */
+    .card img.pip {
+      width: 12px;
+      height: 12px;
+      margin: 1px;
+    }
+    .card img.corner-suit-img {
+      position: absolute;
+      top: 4px;
+      right: 4px;
+      width: 16px;
+      height: 16px;
+      opacity: 0.8;
+      pointer-events: none;
+    }
+    .card .corner-suit {
+      position: absolute;
+      top: 2px;
+      right: 4px;
+      font-size: 14px;
+      opacity: 0.8;
+      pointer-events: none;
+    }
+
+    .card .face-image {
+      flex-grow: 1;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      font-size: 48px;
+      line-height: 1;
+    }
+    .card.dragging {
+      pointer-events: none;
+    }
+    /* Prevent text selection while dragging */
+    * {
+      -webkit-touch-callout: none;
+      -webkit-user-select: none;
+      -khtml-user-select: none;
+      -moz-user-select: none;
+      -ms-user-select: none;
+      user-select: none;
+    }
+  </style>
+</head>
+<body>
+  <h1>FreeCell (Plain JavaScript)</h1>
+  <button id="undoButton" style="margin-bottom: 10px; padding: 6px 12px; font-size: 16px; border-radius: 4px; border: none; background-color: #006600; color: #fff; cursor: pointer;">Undo</button>
+  <div id="game">
+    <div class="top-row">
+      <div class="cells" id="freecells"></div>
+      <div class="foundations" id="foundations"></div>
+    </div>
+    <div class="columns" id="columns"></div>
+  </div>
+  <script>
+    // Define card suits and ranks
+    const suits = ['hearts', 'diamonds', 'clubs', 'spades'];
+    // Use image paths for suits instead of plain characters.  These will be referenced
+    // when rendering individual cards.  The images live in the assets folder and
+    // were generated with a minimalist aesthetic via the imagegen tool.
+    const suitSymbols = {
+      hearts: 'assets/heart.png',
+      diamonds: 'assets/diamond.png',
+      clubs: 'assets/club.png',
+      spades: 'assets/spade.png'
+    };
+
+    // Map of face card images for each suit.  These images depict
+    // character-based Jack, Queen and King illustrations and live in the
+    // assets folder.  Hearts and diamonds share the red illustrations; clubs
+    // and spades share the black illustrations.
+    const faceImages = {
+      hearts: { 11: 'assets/j_red.png', 12: 'assets/q_red.png', 13: 'assets/k_red.png' },
+      diamonds: { 11: 'assets/j_red.png', 12: 'assets/q_red.png', 13: 'assets/k_red.png' },
+      clubs: { 11: 'assets/j_black.png', 12: 'assets/q_black.png', 13: 'assets/k_black.png' },
+      spades: { 11: 'assets/j_black.png', 12: 'assets/q_black.png', 13: 'assets/k_black.png' }
+    };
+
+    // Define pip layouts for number cards (Ace through 10).  Each entry maps
+    // the rank to an array of [x, y] percentage coordinates specifying where
+    // each pip should appear relative to the card dimensions.  Coordinates
+    // are centred by using translate(-50%, -50%) when rendering, so the
+    // values represent the centre of each pip.
+    const pipLayout = {
+      1: [[50, 50]],
+      2: [[50, 25], [50, 75]],
+      3: [[50, 20], [50, 50], [50, 80]],
+      4: [[30, 25], [70, 25], [30, 75], [70, 75]],
+      5: [[30, 25], [70, 25], [50, 50], [30, 75], [70, 75]],
+      6: [[30, 20], [70, 20], [30, 50], [70, 50], [30, 80], [70, 80]],
+      7: [[30, 20], [50, 20], [70, 20], [30, 50], [70, 50], [30, 80], [70, 80]],
+      8: [[30, 20], [50, 20], [70, 20], [30, 50], [70, 50], [30, 80], [50, 80], [70, 80]],
+      9: [[30, 20], [50, 20], [70, 20], [30, 45], [50, 45], [70, 45], [30, 70], [50, 70], [70, 70]],
+      10: [[30, 20], [70, 20], [30, 40], [70, 40], [50, 50], [30, 60], [70, 60], [30, 80], [70, 80], [50, 30]]
+    };
+    const ranks = [1,2,3,4,5,6,7,8,9,10,11,12,13];
+    const rankSymbols = {
+      1: 'A', 11: 'J', 12: 'Q', 13: 'K'
+    };
+
+    // Build deck with unique IDs
+    const deck = [];
+    let cardCounter = 0;
+    for (const suit of suits) {
+      for (const rank of ranks) {
+        const id = `c${cardCounter++}`;
+        deck.push({ id, suit, rank, color: (suit === 'hearts' || suit === 'diamonds') ? 'red' : 'black' });
+      }
+    }
+
+    // Shuffle function
+    function shuffle(array) {
+      for (let i = array.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [array[i], array[j]] = [array[j], array[i]];
+      }
+      return array;
+    }
+
+    // Board state
+    const board = {
+      columns: [[], [], [], [], [], [], [], []],
+      freecells: [null, null, null, null],
+      foundations: {
+        hearts: 0,
+        diamonds: 0,
+        clubs: 0,
+        spades: 0
+      },
+      cardLocations: {} // id -> {type: 'column'|'freecell'|'foundation', index: number|suit, position: index}
+    };
+
+    // Initialize DOM containers
+    const freecellsContainer = document.getElementById('freecells');
+    const foundationsContainer = document.getElementById('foundations');
+    const columnsContainer = document.getElementById('columns');
+
+    // Create container elements
+    for (let i = 0; i < 4; i++) {
+      const cell = document.createElement('div');
+      cell.classList.add('cell');
+      cell.dataset.type = 'freecell';
+      cell.dataset.index = i;
+      freecellsContainer.appendChild(cell);
+    }
+    for (const suit of suits) {
+      const foundation = document.createElement('div');
+      foundation.classList.add('foundation');
+      foundation.dataset.type = 'foundation';
+      foundation.dataset.suit = suit;
+      foundationsContainer.appendChild(foundation);
+    }
+    for (let i = 0; i < 8; i++) {
+      const col = document.createElement('div');
+      col.classList.add('column');
+      col.dataset.type = 'column';
+      col.dataset.index = i;
+      columnsContainer.appendChild(col);
+    }
+
+    // Create card elements and map
+    const cardElements = {};
+    function createCardElement(card) {
+      const div = document.createElement('div');
+      div.classList.add('card');
+      div.classList.add(card.color);
+      div.dataset.cardId = card.id;
+      const rankDisplay = rankSymbols[card.rank] || card.rank;
+      if (card.rank > 10) {
+        // Face cards (Jack, Queen, King): display character illustration with letters in corners
+        const imgSrc = faceImages[card.suit][card.rank];
+        div.innerHTML = `
+          <div class="rank">${rankDisplay}</div>
+          <div class="face-image"><img src="${imgSrc}" style="max-width:80px; max-height:100px;"/></div>
+          <div class="rank" style="text-align: right;">${rankDisplay}</div>
+          <img class="corner-suit-img" src="${suitSymbols[card.suit]}" />
+        `;
+      } else {
+        // Number cards: position pips according to pipLayout
+        let pipsHtml = '';
+        const positions = pipLayout[card.rank] || [];
+        positions.forEach(pos => {
+          const [x, y] = pos;
+          pipsHtml += `<img class="pip" src="${suitSymbols[card.suit]}" style="position:absolute; top:${y}%; left:${x}%; transform: translate(-50%, -50%);" />`;
+        });
+        div.innerHTML = `
+          <div class="rank">${rankDisplay}</div>
+          <div class="pips" style="flex-grow:1; position:relative;">${pipsHtml}</div>
+          <div class="rank" style="text-align: right;">${rankDisplay}</div>
+          <img class="corner-suit-img" src="${suitSymbols[card.suit]}" />
+        `;
+      }
+      cardElements[card.id] = div;
+      // Use pointer events for dragging and native double‑click for auto‑move.
+      div.addEventListener('pointerdown', onCardPointerDown);
+      div.addEventListener('dblclick', onCardDoubleClick);
+      // Suppress stray click events after dragging
+      div.addEventListener('click', eatPostDragClick, true);
+      return div;
+    }
+
+    // Deal shuffled deck into columns: first 4 columns get 7 cards, next 4 get 6
+    function deal() {
+      shuffle(deck);
+      let idx = 0;
+      for (let col = 0; col < 8; col++) {
+        const count = col < 4 ? 7 : 6;
+        for (let j = 0; j < count; j++) {
+          const card = deck[idx++];
+          board.columns[col].push(card.id);
+          board.cardLocations[card.id] = { type: 'column', index: col, position: board.columns[col].length - 1 };
+        }
+      }
+    }
+
+    // Render the entire board
+    function render() {
+      // Clear columns
+      for (let i = 0; i < 8; i++) {
+        const colEl = columnsContainer.children[i];
+        // Remove all child elements
+        colEl.innerHTML = '';
+        // Re-add cards
+        const column = board.columns[i];
+        column.forEach((cardId, idx) => {
+          const card = deck.find(c => c.id === cardId);
+          let cardEl = cardElements[card.id];
+          // create element if doesn't exist
+          if (!cardEl) cardEl = createCardElement(card);
+          cardEl.style.top = `${idx * 30}px`;
+          cardEl.style.left = '0px';
+          cardEl.style.zIndex = idx;
+          cardEl.classList.remove('dragging');
+          colEl.appendChild(cardEl);
+          board.cardLocations[card.id] = { type: 'column', index: i, position: idx };
+        });
+      }
+      // Render freecells
+      for (let i = 0; i < 4; i++) {
+        const cellEl = freecellsContainer.children[i];
+        cellEl.innerHTML = '';
+        const cardId = board.freecells[i];
+        if (cardId) {
+          const card = deck.find(c => c.id === cardId);
+          let cardEl = cardElements[card.id];
+          if (!cardEl) cardEl = createCardElement(card);
+          cardEl.style.top = '0px';
+          cardEl.style.left = '0px';
+          cardEl.style.zIndex = 0;
+          cardEl.classList.remove('dragging');
+          cellEl.appendChild(cardEl);
+          board.cardLocations[card.id] = { type: 'freecell', index: i, position: 0 };
+        }
+      }
+      // Render foundations: show only top card or indicator
+      for (let i = 0; i < 4; i++) {
+        const foundationEl = foundationsContainer.children[i];
+        const suit = foundationEl.dataset.suit;
+        foundationEl.innerHTML = '';
+        const topRank = board.foundations[suit];
+        if (topRank > 0) {
+          // find card in deck of same suit and rank topRank
+          const card = deck.find(c => c.suit === suit && c.rank === topRank);
+          let cardEl = cardElements[card.id];
+          if (!cardEl) cardEl = createCardElement(card);
+          cardEl.style.top = '0px';
+          cardEl.style.left = '0px';
+          cardEl.style.zIndex = 0;
+          cardEl.classList.remove('dragging');
+          foundationEl.appendChild(cardEl);
+          board.cardLocations[card.id] = { type: 'foundation', index: suit, position: topRank };
+        } else {
+          // If empty, show a faint suit icon for guidance
+          const img = document.createElement('img');
+          img.src = suitSymbols[suit];
+          img.style.position = 'absolute';
+          img.style.top = '50%';
+          img.style.left = '50%';
+          img.style.transform = 'translate(-50%, -50%)';
+          img.style.width = '24px';
+          img.style.height = '24px';
+          img.style.opacity = '0.3';
+          foundationEl.appendChild(img);
+        }
+      }
+    }
+
+    // Helper to get card object from id
+    function getCardById(id) {
+      return deck.find(c => c.id === id);
+    }
+
+    // Validate sequence of moving cards (descending ranks and alternating colors)
+    function isValidSequence(cardIds) {
+      for (let i = 0; i < cardIds.length - 1; i++) {
+        const c1 = getCardById(cardIds[i]);
+        const c2 = getCardById(cardIds[i + 1]);
+        if (!((c1.rank === c2.rank + 1) && (c1.color !== c2.color))) {
+          return false;
+        }
+      }
+      return true;
+    }
+
+    // Count empty freecells
+    function countEmptyFreecells() {
+      return board.freecells.filter(c => c === null).length;
+    }
+    // Count empty columns
+    function countEmptyColumns(excludeIndices = []) {
+      return board.columns.reduce((count, col, idx) => {
+        if (col.length === 0 && !excludeIndices.includes(idx)) count++;
+        return count;
+      }, 0);
+    }
+
+    // Determine if move of cardIds sequence to destination is valid
+    function canDrop(movingIds, fromLoc, toType, toIndexOrSuit) {
+      // If dropping onto freecell
+      if (toType === 'freecell') {
+        if (movingIds.length !== 1) return false;
+        if (board.freecells[toIndexOrSuit] !== null) return false;
+        return true;
+      }
+      // Dropping onto foundation
+      if (toType === 'foundation') {
+        if (movingIds.length !== 1) return false;
+        const card = getCardById(movingIds[0]);
+        const topRank = board.foundations[card.suit];
+        if (card.rank === topRank + 1) {
+          // Must be moving only from top of column or freecell
+          if (fromLoc.type === 'column') {
+            const col = board.columns[fromLoc.index];
+            if (col[col.length - 1] !== card.id) return false;
+          }
+          return true;
+        }
+        return false;
+      }
+      // Dropping onto column
+      if (toType === 'column') {
+        const destCol = board.columns[toIndexOrSuit];
+        // Validate sequence to move
+        if (!isValidSequence(movingIds)) return false;
+        // Check number of movable cards based on freecells and empty columns
+        const free = countEmptyFreecells();
+        // Determine the number of empty columns. If the destination column is empty
+        // it should be counted among the empty columns when calculating the move limit.
+        let emptyCols;
+        if (destCol.length === 0) {
+          // Destination is empty: include it in empty column count
+          emptyCols = countEmptyColumns();
+        } else {
+          // Destination not empty: exclude it from empty column count
+          emptyCols = countEmptyColumns([toIndexOrSuit]);
+        }
+        // Do not count the source column as an empty column during a supermove.
+        // Even if moving all cards from a column will leave it empty after the move,
+        // it cannot be used for staging during this move, so we do not add it here.
+        const maxMovable = (free + 1) * Math.pow(2, emptyCols);
+        if (movingIds.length > maxMovable) return false;
+        if (destCol.length === 0) {
+          return true;
+        }
+        // Destination not empty: top card must be one rank higher and opposite color of first moving card
+        const destTopId = destCol[destCol.length - 1];
+        const destCard = getCardById(destTopId);
+        const movingCard = getCardById(movingIds[0]);
+        return destCard.rank === movingCard.rank + 1 && destCard.color !== movingCard.color;
+      }
+      return false;
+    }
+
+    // Variables to track drag state
+    let dragging = false;
+    let dragIds = [];
+    let dragFrom = null;
+    let dragStartMouse = { x: 0, y: 0 };
+    let dragOffsets = [];
+
+    // Undo stack to support undo operations. Each entry records the moved cards
+    // and their source and destination positions.
+    const undoStack = [];
+
+    // Flag indicating an auto-finish is currently running to avoid reentrant calls
+    let autoFinishing = false;
+
+
+    // Pointer event state for drag and double-click handling
+    // We avoid using the old lastClick mechanism and rely on native dblclick events.
+    let pDragging = false;
+    let pDragIds = [];
+    let pDragFrom = null;
+    let pDragStart = { x: 0, y: 0 };
+    let pHasMoved = false;
+    let pSuppressClick = false;
+    const DRAG_THRESHOLD = 6;
+
+    // Track last click for manual double-click detection via click events (fallback)
+    let lastClickTime = 0;
+    let lastClickCardId = null;
+
+    // Track last pointer down for manual double-click detection
+    let lastPDownTime = 0;
+    let lastPDownCardId = null;
+
+    // Offsets for pointer drag. Used to position dragged cards relative to the cursor.
+    let pDragOffsets = [];
+
+    /**
+     * Determine whether the remaining cards can be automatically moved to the
+     * foundations without any blocking (no intercepted cards). This simulates
+     * auto-moving all accessible cards (top-of-column and freecell) to the
+     * foundation and checks if the tableau and freecells would be empty.
+     *
+     * Returns true if auto-finish is possible; false otherwise.
+     */
+    function canAutoFinish() {
+      // Create a shallow copy of the board state for simulation
+      const sim = {
+        columns: board.columns.map(col => col.slice()),
+        freecells: board.freecells.slice(),
+        foundations: Object.assign({}, board.foundations)
+      };
+      let moved = true;
+      while (moved) {
+        moved = false;
+        // Try moving from freecells
+        for (let i = 0; i < sim.freecells.length; i++) {
+          const cardId = sim.freecells[i];
+          if (cardId) {
+            const card = getCardById(cardId);
+            const topRank = sim.foundations[card.suit];
+            if (card.rank === topRank + 1) {
+              // Move to foundation in simulation
+              sim.freecells[i] = null;
+              sim.foundations[card.suit] = card.rank;
+              moved = true;
+            }
+          }
+        }
+        // Try moving from columns
+        for (let i = 0; i < sim.columns.length; i++) {
+          const col = sim.columns[i];
+          if (col.length > 0) {
+            const cardId = col[col.length - 1];
+            const card = getCardById(cardId);
+            const topRank = sim.foundations[card.suit];
+            if (card.rank === topRank + 1) {
+              // Move to foundation in simulation
+              sim.columns[i].pop();
+              sim.foundations[card.suit] = card.rank;
+              moved = true;
+            }
+          }
+        }
+      }
+      // If there are any remaining cards in tableau or freecells, auto finish is not possible
+      const remaining = sim.columns.some(col => col.length > 0) || sim.freecells.some(c => c !== null);
+      return !remaining;
+    }
+
+    /**
+     * Perform automatic finishing by moving all accessible cards to their
+     * respective foundations. This repeatedly moves any top-of-column or
+     * freecell cards to foundation when legal. It pushes undo records for
+     * each move and calls render() and checkWin() appropriately.
+     */
+    function autoFinish() {
+      autoFinishing = true;
+      let moved = true;
+      while (moved) {
+        moved = false;
+        // Move from freecells to foundation when possible
+        for (let i = 0; i < board.freecells.length; i++) {
+          const cardId = board.freecells[i];
+          if (cardId) {
+            const card = getCardById(cardId);
+            // Only move single card to foundation
+            if (canDrop([cardId], { type: 'freecell', index: i, position: 0 }, 'foundation', card.suit)) {
+              const record = {
+                cards: [cardId],
+                from: { type: 'freecell', index: i, position: 0 },
+                to: { type: 'foundation', index: card.suit, prevRank: board.foundations[card.suit] }
+              };
+              // Perform move
+              board.freecells[i] = null;
+              board.foundations[card.suit] = card.rank;
+              render();
+              pushMove(record);
+              moved = true;
+            }
+          }
+        }
+        // Move from columns to foundation when possible
+        for (let i = 0; i < board.columns.length; i++) {
+          const col = board.columns[i];
+          if (col.length > 0) {
+            const cardId = col[col.length - 1];
+            const card = getCardById(cardId);
+            if (canDrop([cardId], { type: 'column', index: i, position: col.length - 1 }, 'foundation', card.suit)) {
+              const record = {
+                cards: [cardId],
+                from: { type: 'column', index: i, position: col.length - 1 },
+                to: { type: 'foundation', index: card.suit, prevRank: board.foundations[card.suit] }
+              };
+              board.columns[i].pop();
+              board.foundations[card.suit] = card.rank;
+              render();
+              pushMove(record);
+              moved = true;
+            }
+          }
+        }
+      }
+      // After finishing moves, check for win
+      checkWin();
+      autoFinishing = false;
+    }
+
+    /**
+     * Attempt to automatically finish the game by moving all cards to the
+     * foundations if possible. If the board state allows an auto-finish
+     * (no intercepted cards), autoFinish() is invoked.
+     */
+    function tryAutoFinish() {
+      if (autoFinishing) return;
+      if (canAutoFinish()) {
+        autoFinish();
+      }
+    }
+
+    /**
+     * Suppress stray click events following a drag operation. When a drag is completed,
+     * browsers emit a click; set pSuppressClick to true in onPointerUp to skip handling.
+     */
+    function eatPostDragClick(e) {
+      // If a drag just occurred, suppress the subsequent click entirely.
+      if (pSuppressClick) {
+        e.stopPropagation();
+        e.preventDefault();
+        return;
+      }
+      // Manual double-click detection based on click events. When the same card is clicked twice
+      // quickly and no drag occurred, attempt to auto move it. This serves as a fallback for
+      // environments where native dblclick events may not be dispatched.
+      const cardEl = e.currentTarget;
+      const cardId = cardEl.dataset.cardId;
+      const nowClick = Date.now();
+      if (lastClickCardId === cardId && (nowClick - lastClickTime) < 400) {
+        // reset and perform auto move
+        lastClickCardId = null;
+        lastClickTime = 0;
+        autoMoveCard(cardId);
+      } else {
+        lastClickCardId = cardId;
+        lastClickTime = nowClick;
+      }
+    }
+
+    /**
+     * Handler for pointerdown events on card elements. Prepares potential drag operations.
+     */
+    function onCardPointerDown(e) {
+      const cardEl = e.currentTarget;
+      const cardId = cardEl.dataset.cardId;
+      const loc = board.cardLocations[cardId];
+      // Do not allow moving cards from foundations.
+      if (loc.type === 'foundation') {
+        return;
+      }
+
+      // Manual double-click detection: if the same card is tapped twice quickly and no drag has started,
+      // attempt to auto move the card. Use pointer down times to detect.
+      const now = Date.now();
+      if (!pDragging && !pHasMoved && lastPDownCardId === cardId && (now - lastPDownTime) < 400) {
+        // Reset last pointer down tracking and trigger auto move
+        lastPDownCardId = null;
+        lastPDownTime = 0;
+        autoMoveCard(cardId);
+        return;
+      }
+      // Update last pointer down tracking
+      lastPDownCardId = cardId;
+      lastPDownTime = now;
+      // Determine the sequence of cards to move.
+      let moving = [];
+      if (loc.type === 'freecell') {
+        moving = [cardId];
+      } else if (loc.type === 'column') {
+        const col = board.columns[loc.index];
+        const idx = col.indexOf(cardId);
+        moving = col.slice(idx);
+      }
+      // Validate sequence ordering when moving multiple cards.
+      if (moving.length > 1 && !isValidSequence(moving)) {
+        return;
+      }
+      // Record drag state.
+      pDragIds = moving;
+      pDragFrom = loc;
+      pDragStart.x = e.clientX;
+      pDragStart.y = e.clientY;
+      pHasMoved = false;
+      pDragging = false;
+      pSuppressClick = false;
+      // Compute cursor offset from first card's top-left corner.
+      pDragOffsets = [];
+      if (moving.length > 0) {
+        const firstEl = cardElements[moving[0]];
+        const rect = firstEl.getBoundingClientRect();
+        pDragOffsets.push({
+          x: e.clientX - rect.left,
+          y: e.clientY - rect.top
+        });
+      }
+      // Capture pointer to ensure we receive subsequent events.
+      cardEl.setPointerCapture(e.pointerId);
+      // Attach pointermove and pointerup handlers to the window.
+      window.addEventListener('pointermove', onPointerMove);
+      window.addEventListener('pointerup', onPointerUp, { once: true });
+    }
+
+    /**
+     * Pointermove handler. Initiates dragging when movement threshold exceeded and updates positions.
+     */
+    function onPointerMove(e) {
+      const dx = e.clientX - pDragStart.x;
+      const dy = e.clientY - pDragStart.y;
+      if (!pDragging && (Math.abs(dx) > DRAG_THRESHOLD || Math.abs(dy) > DRAG_THRESHOLD)) {
+        pDragging = true;
+        pHasMoved = true;
+        // Bring each dragged card to front and add dragging indicator.
+        pDragIds.forEach((id, idx) => {
+          const el = cardElements[id];
+          el.style.zIndex = 1000 + idx;
+          el.classList.add('dragging');
+        });
+      }
+      if (pDragging) {
+        const offset = pDragOffsets[0];
+        pDragIds.forEach((id, idx) => {
+          const el = cardElements[id];
+          const x = e.clientX - offset.x;
+          const y = e.clientY - offset.y + idx * 30;
+          el.style.left = `${x}px`;
+          el.style.top = `${y}px`;
+        });
+      }
+    }
+
+    /**
+     * Resolve drop target metadata (type and index/suit) from a DOM element.
+     */
+    function resolveDropTarget(element) {
+      let target = element;
+      while (target && !target.dataset.type) {
+        target = target.parentElement;
+      }
+      if (!target || !target.dataset.type) {
+        return { type: null, indexOrSuit: null };
+      }
+      const toType = target.dataset.type;
+      let toIndexOrSuit = null;
+      if (toType === 'freecell' || toType === 'column') {
+        toIndexOrSuit = parseInt(target.dataset.index);
+      } else if (toType === 'foundation') {
+        toIndexOrSuit = target.dataset.suit;
+      }
+      return { type: toType, indexOrSuit: toIndexOrSuit };
+    }
+
+    /**
+     * Pointerup handler. Completes drag operations or leaves click intact.
+     */
+    function onPointerUp(e) {
+      window.removeEventListener('pointermove', onPointerMove);
+      // Clear dragging styles
+      pDragIds.forEach((id) => {
+        const el = cardElements[id];
+        el.classList.remove('dragging');
+      });
+      let moved = false;
+      let record = null;
+      if (pDragging) {
+        // Determine potential drop target
+        const dropEl = document.elementFromPoint(e.clientX, e.clientY);
+        const { type: toType, indexOrSuit: toIndexOrSuit } = resolveDropTarget(dropEl);
+        if (toType && canDrop(pDragIds, pDragFrom, toType, toIndexOrSuit)) {
+          // Prepare undo record
+          record = {
+            cards: [...pDragIds],
+            from: { type: pDragFrom.type, index: pDragFrom.index, position: pDragFrom.position },
+            to: { type: toType, index: toIndexOrSuit }
+          };
+          if (toType === 'foundation') {
+            const card = getCardById(pDragIds[0]);
+            record.to.prevRank = board.foundations[card.suit];
+          }
+          // Remove cards from source
+          if (pDragFrom.type === 'freecell') {
+            board.freecells[pDragFrom.index] = null;
+          } else if (pDragFrom.type === 'column') {
+            board.columns[pDragFrom.index] = board.columns[pDragFrom.index].slice(0, pDragFrom.position);
+          }
+          // Add cards to destination
+          if (toType === 'freecell') {
+            board.freecells[toIndexOrSuit] = pDragIds[0];
+          } else if (toType === 'foundation') {
+            const card = getCardById(pDragIds[0]);
+            board.foundations[card.suit] = card.rank;
+          } else if (toType === 'column') {
+            board.columns[toIndexOrSuit] = board.columns[toIndexOrSuit].concat(pDragIds);
+          }
+          moved = true;
+        }
+        // Rerender the board: if invalid drop, this resets the cards to original positions
+        render();
+        if (moved && record) {
+        pushMove(record);
+        checkWin();
+        tryAutoFinish();
+        // Eat the click after a successful drag-drop
+        pSuppressClick = true;
+        setTimeout(() => { pSuppressClick = false; }, 0);
+      }
+      }
+      // Reset pointer drag state
+      pDragging = false;
+      pHasMoved = false;
+      pDragIds = [];
+      pDragFrom = null;
+      pDragOffsets = [];
+    }
+
+    /**
+     * Native double-click handler. Attempts to auto move a card to best location.
+     */
+    function onCardDoubleClick(e) {
+      // If a drag happened during this pointer sequence, ignore the double-click
+      if (pHasMoved || pDragging) {
+        return;
+      }
+      const cardId = e.currentTarget.dataset.cardId;
+      autoMoveCard(cardId);
+    }
+
+    // Mouse down handler on cards
+    function onCardMouseDown(e) {
+      const cardEl = e.currentTarget;
+      const cardId = cardEl.dataset.cardId;
+      const loc = board.cardLocations[cardId];
+      // Determine sequence of cards to move
+      if (loc.type === 'foundation') {
+        // Can't move from foundation
+        return;
+      }
+      if (loc.type === 'freecell') {
+        dragIds = [cardId];
+      } else if (loc.type === 'column') {
+        const col = board.columns[loc.index];
+        const idx = col.indexOf(cardId);
+        dragIds = col.slice(idx);
+      }
+      // Validate that sequence itself is valid (descending and alternating colors) unless only one card
+      if (dragIds.length > 1 && !isValidSequence(dragIds)) {
+        dragIds = [];
+        return;
+      }
+      dragging = true;
+      dragFrom = loc;
+      dragStartMouse.x = e.clientX;
+      dragStartMouse.y = e.clientY;
+      dragOffsets = [];
+      // Bring selected cards to front and mark as dragging
+      dragIds.forEach((id, idx) => {
+        const el = cardElements[id];
+        const rect = el.getBoundingClientRect();
+        dragOffsets.push({
+          x: e.clientX - rect.left,
+          y: e.clientY - rect.top
+        });
+        el.style.zIndex = 1000 + idx;
+        el.classList.add('dragging');
+      });
+      // Add event listeners for move and up
+      document.addEventListener('mousemove', onMouseMove);
+      document.addEventListener('mouseup', onMouseUp);
+    }
+
+    function onMouseMove(e) {
+      if (!dragging) return;
+      // Move each card relative to initial offset
+      dragIds.forEach((id, idx) => {
+        const el = cardElements[id];
+        const offset = dragOffsets[0];
+        const x = e.clientX - offset.x;
+        const y = e.clientY - offset.y + idx * 30;
+        el.style.left = `${x}px`;
+        el.style.top = `${y}px`;
+      });
+    }
+
+    function onMouseUp(e) {
+      if (!dragging) return;
+      // Determine drop target
+      const dropEl = document.elementFromPoint(e.clientX, e.clientY);
+      let toType = null;
+      let toIndexOrSuit = null;
+      if (dropEl) {
+        // Traverse up DOM tree to find container with dataset.type
+        let target = dropEl;
+        while (target && !target.dataset.type) {
+          target = target.parentElement;
+        }
+        if (target && target.dataset.type) {
+          toType = target.dataset.type;
+          if (toType === 'freecell' || toType === 'column') {
+            toIndexOrSuit = parseInt(target.dataset.index);
+          } else if (toType === 'foundation') {
+            toIndexOrSuit = target.dataset.suit;
+          }
+        }
+      }
+      let moved = false;
+      let record = null;
+      if (toType && canDrop(dragIds, dragFrom, toType, toIndexOrSuit)) {
+        // Prepare record for undo
+        record = {
+          cards: [...dragIds],
+          from: { type: dragFrom.type, index: dragFrom.index, position: dragFrom.position },
+          to: { type: toType, index: toIndexOrSuit }
+        };
+        if (toType === 'foundation') {
+          // Save previous foundation rank for undo
+          // Determine suit from the moving card
+          const card = getCardById(dragIds[0]);
+          record.to.prevRank = board.foundations[card.suit];
+        }
+        // Perform the move
+        if (dragFrom.type === 'freecell') {
+          board.freecells[dragFrom.index] = null;
+        } else if (dragFrom.type === 'column') {
+          // Remove all cards from the starting index
+          board.columns[dragFrom.index] = board.columns[dragFrom.index].slice(0, dragFrom.position);
+        }
+        if (toType === 'freecell') {
+          board.freecells[toIndexOrSuit] = dragIds[0];
+        } else if (toType === 'foundation') {
+          const card = getCardById(dragIds[0]);
+          board.foundations[card.suit] = card.rank;
+        } else if (toType === 'column') {
+          board.columns[toIndexOrSuit] = board.columns[toIndexOrSuit].concat(dragIds);
+        }
+        moved = true;
+      }
+      // Reset dragging styles
+      dragIds.forEach((id) => {
+        const el = cardElements[id];
+        el.classList.remove('dragging');
+      });
+      dragging = false;
+      dragIds = [];
+      dragOffsets = [];
+      // Remove listeners
+      document.removeEventListener('mousemove', onMouseMove);
+      document.removeEventListener('mouseup', onMouseUp);
+      // Re-render board if moved, or else return to original positions
+      render();
+      // Push undo record if a move happened
+      if (moved && record) {
+        pushMove(record);
+      }
+      // Check win after any drop
+      checkWin();
+      tryAutoFinish();
+    }
+    // Removed custom click-based double click detection. We rely on native
+    // double-click events handled in onCardDoubleClick instead.
+
+    /**
+     * Automatically move a single card to foundation, a valid column, or freecell.
+     */
+    function autoMoveCard(cardId) {
+      const loc = board.cardLocations[cardId];
+      // Do not auto-move cards from foundation
+      if (loc.type === 'foundation') return;
+      // Determine the sequence of cards to attempt to move.
+      let movingIds = [];
+      if (loc.type === 'freecell') {
+        movingIds = [cardId];
+      } else if (loc.type === 'column') {
+        const col = board.columns[loc.index];
+        const idx = col.indexOf(cardId);
+        movingIds = col.slice(idx);
+      } else {
+        // Unknown location
+        return;
+      }
+      // If moving a sequence from a column, ensure the sequence is valid
+      if (movingIds.length > 1 && !isValidSequence(movingIds)) {
+        // Not a valid descending alternating sequence; abort
+        return;
+      }
+      const firstCard = getCardById(movingIds[0]);
+      // Attempt to move a single card to foundation only if the sequence length is 1
+      if (movingIds.length === 1) {
+        if (canDrop(movingIds, loc, 'foundation', firstCard.suit)) {
+          const record = {
+            cards: [cardId],
+            from: { type: loc.type, index: loc.index, position: loc.position },
+            to: { type: 'foundation', index: firstCard.suit, prevRank: board.foundations[firstCard.suit] }
+          };
+          if (loc.type === 'column') {
+            board.columns[loc.index].pop();
+          } else if (loc.type === 'freecell') {
+            board.freecells[loc.index] = null;
+          }
+          board.foundations[firstCard.suit] = firstCard.rank;
+          render();
+          pushMove(record);
+          checkWin();
+          tryAutoFinish();
+          return;
+        }
+      }
+      // Try to move to another column with the full sequence
+      const candidateColumns = [];
+      for (let i = 0; i < 8; i++) {
+        if (loc.type === 'column' && i === loc.index) continue;
+        if (canDrop(movingIds, loc, 'column', i)) {
+          candidateColumns.push(i);
+        }
+      }
+      if (candidateColumns.length > 0) {
+        // Sort candidate columns by how well they fit: prefer building on highest rank difference
+        candidateColumns.sort((a, b) => {
+          const colA = board.columns[a];
+          const colB = board.columns[b];
+          const topA = colA.length ? getCardById(colA[colA.length - 1]) : null;
+          const topB = colB.length ? getCardById(colB[colB.length - 1]) : null;
+          // difference is how many ranks we span; if destination empty, treat diff as large
+          const diffA = topA ? (topA.rank - firstCard.rank) : 100;
+          const diffB = topB ? (topB.rank - firstCard.rank) : 100;
+          return diffA - diffB;
+        });
+        const targetCol = candidateColumns[0];
+        // Prepare undo record. The from position for sequences uses the starting index in the column
+        const record = {
+          cards: [...movingIds],
+          from: { type: loc.type, index: loc.index, position: loc.position },
+          to: { type: 'column', index: targetCol }
+        };
+        // Remove cards from source
+        if (loc.type === 'freecell') {
+          board.freecells[loc.index] = null;
+        } else if (loc.type === 'column') {
+          // Remove the moving cards from the column
+          board.columns[loc.index] = board.columns[loc.index].slice(0, loc.position);
+        }
+        // Append moving cards to destination column
+        board.columns[targetCol] = board.columns[targetCol].concat(movingIds);
+        render();
+        pushMove(record);
+        checkWin();
+        tryAutoFinish();
+        return;
+      }
+      // If no column move, try moving single card to freecell (only if movingIds length 1)
+      if (movingIds.length === 1) {
+        const freeIndex = board.freecells.findIndex(c => c === null);
+        if (freeIndex !== -1 && canDrop(movingIds, loc, 'freecell', freeIndex)) {
+          const record = {
+            cards: [cardId],
+            from: { type: loc.type, index: loc.index, position: loc.position },
+            to: { type: 'freecell', index: freeIndex }
+          };
+          if (loc.type === 'column') {
+            board.columns[loc.index].pop();
+          } else if (loc.type === 'freecell') {
+            board.freecells[loc.index] = null;
+          }
+          board.freecells[freeIndex] = cardId;
+          render();
+          pushMove(record);
+          checkWin();
+          tryAutoFinish();
+        }
+      }
+    }
+
+    /**
+     * Check if the game is won (all foundations complete) and if so display
+     * a victory message and start a new game after a delay.
+     */
+    function checkWin() {
+      if (board.foundations.hearts === 13 &&
+          board.foundations.diamonds === 13 &&
+          board.foundations.clubs === 13 &&
+          board.foundations.spades === 13) {
+        // Show win message
+        let messageEl = document.getElementById('win-message');
+        if (!messageEl) {
+          messageEl = document.createElement('div');
+          messageEl.id = 'win-message';
+          messageEl.style.position = 'fixed';
+          messageEl.style.top = '50%';
+          messageEl.style.left = '50%';
+          messageEl.style.transform = 'translate(-50%, -50%)';
+          messageEl.style.padding = '20px 40px';
+          messageEl.style.backgroundColor = 'rgba(0,0,0,0.8)';
+          messageEl.style.color = '#fff';
+          messageEl.style.fontSize = '32px';
+          messageEl.style.borderRadius = '8px';
+          messageEl.style.zIndex = 2000;
+          messageEl.textContent = 'You win! Starting new game...';
+          document.body.appendChild(messageEl);
+        }
+        // Start new game after 3 seconds
+        setTimeout(() => {
+          if (messageEl) {
+            messageEl.remove();
+          }
+          newGame();
+        }, 3000);
+      }
+    }
+
+    /**
+     * Start a new game by shuffling and redealing cards.
+     */
+    function newGame() {
+      // Reset board state
+      // Clear undo history
+      undoStack.length = 0;
+      for (let i = 0; i < 8; i++) board.columns[i] = [];
+      for (let i = 0; i < 4; i++) board.freecells[i] = null;
+      board.foundations.hearts = 0;
+      board.foundations.diamonds = 0;
+      board.foundations.clubs = 0;
+      board.foundations.spades = 0;
+      board.cardLocations = {};
+      // Shuffle the deck again
+      shuffle(deck);
+      // Deal
+      let idx = 0;
+      for (let col = 0; col < 8; col++) {
+        const count = col < 4 ? 7 : 6;
+        for (let j = 0; j < count; j++) {
+          const card = deck[idx++];
+          board.columns[col].push(card.id);
+          board.cardLocations[card.id] = { type: 'column', index: col, position: board.columns[col].length - 1 };
+        }
+      }
+      render();
+    }
+
+    /**
+     * Push a move record to the undo stack.
+     */
+    function pushMove(record) {
+      undoStack.push(record);
+    }
+
+    /**
+     * Undo the last move if available.
+     */
+    function undoMove() {
+      const record = undoStack.pop();
+      if (!record) return;
+      const { cards, from, to } = record;
+      // Remove cards from destination
+      if (to.type === 'column') {
+        // Remove last cards.length cards from destination column
+        board.columns[to.index] = board.columns[to.index].slice(0, board.columns[to.index].length - cards.length);
+      } else if (to.type === 'freecell') {
+        board.freecells[to.index] = null;
+      } else if (to.type === 'foundation') {
+        // Restore previous foundation rank
+        board.foundations[to.index] = to.prevRank;
+      }
+      // Restore cards to original location
+      if (from.type === 'column') {
+        const col = board.columns[from.index];
+        // Insert cards back at their original position
+        const before = col.slice(0, from.position);
+        const after = col.slice(from.position);
+        board.columns[from.index] = before.concat(cards).concat(after);
+      } else if (from.type === 'freecell') {
+        board.freecells[from.index] = cards[0];
+      } else if (from.type === 'foundation') {
+        // This situation shouldn't occur in our implementation
+        board.foundations[from.index] = from.prevRank;
+      }
+      render();
+    }
+
+    // Add mouse down event to each card (delegate after creation)
+    function attachCardEvents() {
+      Object.values(cardElements).forEach((el) => {
+        el.addEventListener('mousedown', onCardMouseDown);
+      });
+    }
+
+    // Initialize game
+    deal();
+    render();
+    // Do not attach legacy mousedown handlers; pointer-based handlers are bound on card creation
+
+    // Attach undo button handler
+    const undoBtn = document.getElementById('undoButton');
+    undoBtn.addEventListener('click', () => {
+      undoMove();
+    });
+  </script>
+</body>
+</html>
