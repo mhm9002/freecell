@@ -18,9 +18,14 @@
       color: #fff;
       margin: 20px;
     }
+    /* The game container should stretch to the width of the screen on small devices
+       but remain capped at a reasonable maximum on larger screens. */
     #game {
-      width: 1100px;
+      width: 100%;
+      max-width: 1100px;
       margin-bottom: 40px;
+      padding: 0 10px;
+      box-sizing: border-box;
     }
     .top-row {
       display: flex;
@@ -30,33 +35,42 @@
     .cells,
     .foundations {
       display: flex;
+      justify-content: space-between;
+      width: 100%;
     }
     .cell,
     .foundation {
-      width: 100px;
-      height: 140px;
+      flex: 1;
+      max-width: 100px;
+      /* Maintain card aspect ratio on responsive screens */
+      aspect-ratio: 5 / 7;
+      height: auto;
       border: 2px dashed rgba(255,255,255,0.5);
       border-radius: 6px;
-      margin: 0 5px;
+      margin: 0 4px;
       position: relative;
       box-sizing: border-box;
     }
     .columns {
       display: flex;
       justify-content: space-between;
+      width: 100%;
     }
     .column {
       flex: 1;
-      min-width: 100px;
-      height: 600px;
+      min-width: 0;
+      max-width: 120px;
+      height: 65vh;
       border: 2px dashed rgba(255,255,255,0.3);
       border-radius: 6px;
-      margin: 0 5px;
+      margin: 0 4px;
       position: relative;
     }
     .card {
-      width: 100px;
-      height: 140px;
+      width: 100%;
+      /* Use aspect-ratio to keep cards proportional on all devices */
+      aspect-ratio: 5 / 7;
+      height: auto;
       border: 1px solid #222;
       border-radius: 6px;
       background-color: #fff;
@@ -69,7 +83,6 @@
       justify-content: space-between;
       padding: 5px;
       box-sizing: border-box;
-      position: absolute;
       overflow: hidden;
     }
     .card.red {
@@ -148,6 +161,10 @@
 <body>
   <h1>FreeCell (Plain JavaScript)</h1>
   <button id="undoButton" style="margin-bottom: 10px; padding: 6px 12px; font-size: 16px; border-radius: 4px; border: none; background-color: #006600; color: #fff; cursor: pointer;">Undo</button>
+  <!-- Scoreboard displays moves, score and elapsed time -->
+  <div id="scoreboard" style="color:#fff; margin-bottom: 10px; font-size: 16px;">
+    Moves: 0 | Score: 0 | Time: 00:00
+  </div>
   <div id="game">
     <div class="top-row">
       <div class="cells" id="freecells"></div>
@@ -232,6 +249,33 @@
       },
       cardLocations: {} // id -> {type: 'column'|'freecell'|'foundation', index: number|suit, position: index}
     };
+
+    // ------------------------------------------------------------
+    // Scoring and timing variables for the scoreboard. These track the
+    // number of moves made, accumulated score, and the starting time
+    // for elapsed time calculation. The scoreboard is displayed above
+    // the game board and updated whenever a move is made or undone.
+    let movesCount = 0;
+    let score = 0;
+    let timerStart = Date.now();
+    let timerInterval = null;
+
+    /**
+     * Update the scoreboard display with current moves, score, and elapsed time.
+     * This function reads the movesCount, score and timerStart values,
+     * computes the elapsed minutes and seconds and writes the text into
+     * the #scoreboard element if present.
+     */
+    function updateScoreboard() {
+      const elapsed = Math.floor((Date.now() - timerStart) / 1000);
+      const minutes = Math.floor(elapsed / 60);
+      const seconds = elapsed % 60;
+      const timeStr = String(minutes).padStart(2, '0') + ':' + String(seconds).padStart(2, '0');
+      const scoreboardEl = document.getElementById('scoreboard');
+      if (scoreboardEl) {
+        scoreboardEl.textContent = `Moves: ${movesCount} | Score: ${score} | Time: ${timeStr}`;
+      }
+    }
 
     // Initialize DOM containers
     const freecellsContainer = document.getElementById('freecells');
@@ -1008,22 +1052,14 @@
       const firstCard = getCardById(movingIds[0]);
       // Attempt to move a single card to foundation only if the sequence length is 1
       if (movingIds.length === 1) {
+        // Try to move single card to foundation with animation
         if (canDrop(movingIds, loc, 'foundation', firstCard.suit)) {
           const record = {
             cards: [cardId],
             from: { type: loc.type, index: loc.index, position: loc.position },
             to: { type: 'foundation', index: firstCard.suit, prevRank: board.foundations[firstCard.suit] }
           };
-          if (loc.type === 'column') {
-            board.columns[loc.index].pop();
-          } else if (loc.type === 'freecell') {
-            board.freecells[loc.index] = null;
-          }
-          board.foundations[firstCard.suit] = firstCard.rank;
-          render();
-          pushMove(record);
-          checkWin();
-          tryAutoFinish();
+          performMoveWithAnimation([cardId], loc, 'foundation', firstCard.suit, record);
           return;
         }
       }
@@ -1042,31 +1078,17 @@
           const colB = board.columns[b];
           const topA = colA.length ? getCardById(colA[colA.length - 1]) : null;
           const topB = colB.length ? getCardById(colB[colB.length - 1]) : null;
-          // difference is how many ranks we span; if destination empty, treat diff as large
           const diffA = topA ? (topA.rank - firstCard.rank) : 100;
           const diffB = topB ? (topB.rank - firstCard.rank) : 100;
           return diffA - diffB;
         });
         const targetCol = candidateColumns[0];
-        // Prepare undo record. The from position for sequences uses the starting index in the column
         const record = {
           cards: [...movingIds],
           from: { type: loc.type, index: loc.index, position: loc.position },
           to: { type: 'column', index: targetCol }
         };
-        // Remove cards from source
-        if (loc.type === 'freecell') {
-          board.freecells[loc.index] = null;
-        } else if (loc.type === 'column') {
-          // Remove the moving cards from the column
-          board.columns[loc.index] = board.columns[loc.index].slice(0, loc.position);
-        }
-        // Append moving cards to destination column
-        board.columns[targetCol] = board.columns[targetCol].concat(movingIds);
-        render();
-        pushMove(record);
-        checkWin();
-        tryAutoFinish();
+        performMoveWithAnimation(movingIds, loc, 'column', targetCol, record);
         return;
       }
       // If no column move, try moving single card to freecell (only if movingIds length 1)
@@ -1078,18 +1100,98 @@
             from: { type: loc.type, index: loc.index, position: loc.position },
             to: { type: 'freecell', index: freeIndex }
           };
-          if (loc.type === 'column') {
-            board.columns[loc.index].pop();
-          } else if (loc.type === 'freecell') {
-            board.freecells[loc.index] = null;
-          }
-          board.freecells[freeIndex] = cardId;
-          render();
-          pushMove(record);
-          checkWin();
-          tryAutoFinish();
+          performMoveWithAnimation([cardId], loc, 'freecell', freeIndex, record);
         }
       }
+    }
+
+    /**
+     * Perform a move with simple animation. Moves the first card in movingIds from its current position to the destination
+     * coordinates and then updates the board, renders and processes undo record with scoring. All moving cards are hidden
+     * during the animation and revealed afterwards.
+     *
+     * @param {string[]} movingIds - ids of cards being moved
+     * @param {Object} fromLoc - the original location {type, index, position}
+     * @param {string} toType - 'foundation', 'column' or 'freecell'
+     * @param {number|string} toIndexOrSuit - index for columns/freecells or suit for foundation
+     * @param {Object} record - undo record for the move
+     */
+    function performMoveWithAnimation(movingIds, fromLoc, toType, toIndexOrSuit, record) {
+      // Determine start position from first card
+      const firstId = movingIds[0];
+      const firstEl = cardElements[firstId];
+      const startRect = firstEl.getBoundingClientRect();
+      // Determine destination element and offset
+      let destEl;
+      let destLen = 0;
+      if (toType === 'foundation') {
+        destEl = Array.from(foundationsContainer.children).find(el => el.dataset.suit === toIndexOrSuit);
+      } else if (toType === 'freecell') {
+        destEl = freecellsContainer.children[toIndexOrSuit];
+      } else {
+        destEl = columnsContainer.children[toIndexOrSuit];
+        destLen = board.columns[toIndexOrSuit].length;
+      }
+      const destRect = destEl.getBoundingClientRect();
+      const destX = destRect.left;
+      let destY = destRect.top;
+      if (toType === 'column') {
+        destY += destLen * 30;
+      }
+      // Hide original cards
+      movingIds.forEach(id => {
+        const el = cardElements[id];
+        el.style.visibility = 'hidden';
+      });
+      // Update board for move
+      if (fromLoc.type === 'freecell') {
+        board.freecells[fromLoc.index] = null;
+      } else if (fromLoc.type === 'column') {
+        board.columns[fromLoc.index] = board.columns[fromLoc.index].slice(0, fromLoc.position);
+      }
+      if (toType === 'freecell') {
+        board.freecells[toIndexOrSuit] = movingIds[0];
+      } else if (toType === 'foundation') {
+        const card = getCardById(movingIds[0]);
+        board.foundations[card.suit] = card.rank;
+      } else if (toType === 'column') {
+        board.columns[toIndexOrSuit] = board.columns[toIndexOrSuit].concat(movingIds);
+      }
+      // Render board and hide new cards at destination
+      render();
+      movingIds.forEach(id => {
+        const el = cardElements[id];
+        el.style.visibility = 'hidden';
+      });
+      // Create ghost clone of first card for animation
+      const ghost = firstEl.cloneNode(true);
+      ghost.style.position = 'fixed';
+      ghost.style.pointerEvents = 'none';
+      ghost.style.left = `${startRect.left}px`;
+      ghost.style.top = `${startRect.top}px`;
+      ghost.style.width = `${startRect.width}px`;
+      ghost.style.height = `${startRect.height}px`;
+      ghost.style.zIndex = 2000;
+      ghost.style.transition = 'top 0.35s ease, left 0.35s ease';
+      document.body.appendChild(ghost);
+      // Trigger transition to destination
+      requestAnimationFrame(() => {
+        ghost.style.left = `${destX}px`;
+        ghost.style.top = `${destY}px`;
+      });
+      // After animation, remove ghost, show cards, push move, scoring, check win
+      setTimeout(() => {
+        ghost.remove();
+        movingIds.forEach(id => {
+          const el = cardElements[id];
+          el.style.visibility = '';
+        });
+        // Push move record with scoring
+        pushMove(record);
+        // Check win and auto finish after the move
+        checkWin();
+        tryAutoFinish();
+      }, 400);
     }
 
     /**
@@ -1143,6 +1245,13 @@
       board.foundations.clubs = 0;
       board.foundations.spades = 0;
       board.cardLocations = {};
+      // Reset scoring and timer
+      movesCount = 0;
+      score = 0;
+      timerStart = Date.now();
+      if (timerInterval) clearInterval(timerInterval);
+      timerInterval = setInterval(updateScoreboard, 1000);
+      updateScoreboard();
       // Shuffle the deck again
       shuffle(deck);
       // Deal
@@ -1163,6 +1272,11 @@
      */
     function pushMove(record) {
       undoStack.push(record);
+      // Scoring: increment move count and adjust score. Moves cost 1 point; foundation moves give +10 per card.
+      movesCount++;
+      const scoreDelta = (record.to.type === 'foundation' ? 10 * record.cards.length : 0) - 1;
+      score += scoreDelta;
+      updateScoreboard();
     }
 
     /**
@@ -1196,6 +1310,11 @@
         board.foundations[from.index] = from.prevRank;
       }
       render();
+      // Adjust score and move count after undo. Revert the scoring for this record.
+      movesCount--;
+      const scoreDelta = (record.to.type === 'foundation' ? 10 * record.cards.length : 0) - 1;
+      score -= scoreDelta;
+      updateScoreboard();
     }
 
     // Add mouse down event to each card (delegate after creation)
@@ -1208,6 +1327,11 @@
     // Initialize game
     deal();
     render();
+    // Initialize timer and scoreboard
+    timerStart = Date.now();
+    if (timerInterval) clearInterval(timerInterval);
+    timerInterval = setInterval(updateScoreboard, 1000);
+    updateScoreboard();
     // Do not attach legacy mousedown handlers; pointer-based handlers are bound on card creation
 
     // Attach undo button handler
